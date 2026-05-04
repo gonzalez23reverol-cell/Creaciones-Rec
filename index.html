@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CreacionesRec | Catálogo Oficial</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;1,700&family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet">
+    
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, deleteDoc, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'creaciones-rec-prod';
+
+        // Variables Globales
+        let currentProducts = [];
+        let currentFilter = 'decoracion';
+        let currentUser = null;
+
+        // INICIALIZACIÓN DE AUTENTICACIÓN (REGLA 3)
+        const initAuth = async () => {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Error crítico de autenticación:", error);
+            }
+        };
+
+        // Escuchar cambios de Auth y disparar Firestore
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                currentUser = user;
+                // Una vez autenticado, cargamos los datos
+                escucharProductos();
+                cargarConfig();
+            }
+        });
+
+        // Escuchar cambios en la base de datos (REGLA 1 y 2)
+        function escucharProductos() {
+            if (!currentUser) return;
+            
+            // Usamos la ruta estricta para colecciones públicas
+            const colRef = collection(db, 'artifacts', appId, 'public', 'data', 'productos');
+            
+            onSnapshot(colRef, (snapshot) => {
+                currentProducts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderTienda();
+                renderAdminList();
+            }, (error) => {
+                console.error("Error en snapshot de productos:", error);
+            });
+        }
+
+        async function cargarConfig() {
+            if (!currentUser) return;
+            
+            // REGLA 1: La ruta del documento debe tener segmentos pares
+            // artifacts (1) / appId (2) / public (3) / data (4) / settings (5) / global (6)
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global');
+            
+            try {
+                const snap = await getDoc(docRef);
+                if(snap.exists()) {
+                    window.wsNumber = snap.data().ws || "584120000000";
+                    if(document.getElementById('admin-ws')) document.getElementById('admin-ws').value = window.wsNumber;
+                } else {
+                    window.wsNumber = "584120000000";
+                }
+            } catch (error) {
+                console.error("Error cargando config:", error);
+            }
+        }
+
+        // FUNCIONES DE INTERFAZ
+        window.cambiarFiltro = (f) => {
+            currentFilter = f;
+            const btnDecoracion = document.getElementById('tab-decoracion');
+            const btnRegalo = document.getElementById('tab-regalo');
+            
+            if (btnDecoracion && btnRegalo) {
+                btnDecoracion.className = f === 'decoracion' ? "flex-1 py-4 rounded-2xl font-bold text-xs uppercase bg-rose-600 text-white shadow-xl shadow-rose-200" : "flex-1 py-4 rounded-2xl font-bold text-xs uppercase bg-white text-slate-400 border border-slate-100";
+                btnRegalo.className = f === 'regalo' ? "flex-1 py-4 rounded-2xl font-bold text-xs uppercase bg-rose-600 text-white shadow-xl shadow-rose-200" : "flex-1 py-4 rounded-2xl font-bold text-xs uppercase bg-white text-slate-400 border border-slate-100";
+            }
+            renderTienda();
+        };
+
+        function renderTienda() {
+            const grid = document.getElementById('grid-main');
+            if(!grid) return;
+            grid.innerHTML = '';
+            
+            // Filtramos en memoria (REGLA 2)
+            const filtrados = currentProducts.filter(p => p.tipo === currentFilter);
+            
+            if(filtrados.length === 0) {
+                grid.innerHTML = `<div class="col-span-full py-20 text-center text-slate-300 font-bold uppercase tracking-widest text-[10px]">No hay productos publicados</div>`;
+                return;
+            }
+
+            filtrados.forEach(p => {
+                grid.innerHTML += `
+                    <div onclick="verDetalle('${p.id}')" class="bg-white rounded-[2.5rem] overflow-hidden shadow-sm hover:shadow-2xl transition-all duration-300 cursor-pointer border border-slate-50 fade-in">
+                        <div class="h-[380px] relative">
+                            <img src="${p.fotos[0] || ''}" class="w-full h-full object-cover" onerror="this.src='https://via.placeholder.com/400x500?text=Sin+Imagen'">
+                            <div class="absolute bottom-5 left-5 bg-white/95 px-5 py-2 rounded-2xl shadow font-black text-rose-600 text-xl">$${p.precio}</div>
+                        </div>
+                        <div class="p-7 text-center">
+                            <p class="text-[9px] font-black text-rose-400 uppercase tracking-widest mb-1">${p.categoriaExtra || p.tipo}</p>
+                            <h4 class="font-serif font-bold text-2xl text-slate-800">${p.nombre}</h4>
+                        </div>
+                    </div>
+                `;
+            });
+        }
+
+        window.verDetalle = (id) => {
+            const p = currentProducts.find(i => i.id === id);
+            if (!p) return;
+
+            document.getElementById('det-titulo').innerText = p.nombre;
+            document.getElementById('det-precio-box').innerText = `$${p.precio}`;
+            document.getElementById('det-desc').innerText = p.desc;
+            document.getElementById('det-cat').innerText = p.categoriaExtra || p.tipo;
+            document.getElementById('foto-principal').src = p.fotos[0];
+            
+            const thumbs = document.getElementById('miniaturas');
+            thumbs.innerHTML = '';
+            p.fotos.forEach((f) => {
+                if(f) {
+                    thumbs.innerHTML += `<img src="${f}" onclick="document.getElementById('foto-principal').src=this.src" class="aspect-square object-cover rounded-2xl cursor-pointer border-2 border-transparent hover:border-rose-500 transition-all">`;
+                }
+            });
+
+            document.getElementById('ws-btn').onclick = () => window.open(`https://wa.me/${window.wsNumber}?text=Hola! Me interesa: *${p.nombre}*`);
+            document.getElementById('modal-detalle').classList.remove('hidden-view');
+        };
+
+        // ACCIONES DE ADMIN
+        async function compress(file) {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.src = e.target.result;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        const MAX = 700;
+                        const scale = MAX / img.width;
+                        canvas.width = MAX;
+                        canvas.height = img.height * scale;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                        resolve(canvas.toDataURL('image/jpeg', 0.6));
+                    };
+                };
+            });
+        }
+
+        window.publicarProducto = async () => {
+            if (!currentUser) {
+                alert("Esperando conexión con el servidor...");
+                return;
+            }
+
+            const nombre = document.getElementById('n-nombre').value;
+            const precio = document.getElementById('n-precio').value;
+            const f1 = document.getElementById('file-1').files[0];
+
+            if(!nombre || !precio || !f1) {
+                alert("Faltan datos obligatorios (Nombre, Precio y Foto 1)");
+                return;
+            }
+
+            const btn = document.getElementById('btn-publicar');
+            btn.disabled = true;
+            btn.innerText = "PUBLICANDO...";
+
+            try {
+                const fotos = [];
+                for(let i=1; i<=4; i++) {
+                    const file = document.getElementById(`file-${i}`).files[0];
+                    if(file) fotos.push(await compress(file));
+                }
+
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'productos'), {
+                    nombre,
+                    precio,
+                    tipo: document.getElementById('n-tipo').value,
+                    categoriaExtra: document.getElementById('n-cat-extra').value || "",
+                    desc: document.getElementById('n-desc').value || "",
+                    fotos,
+                    creadoEn: Date.now()
+                });
+
+                // Limpiar
+                document.getElementById('n-nombre').value = "";
+                document.getElementById('n-precio').value = "";
+                document.getElementById('n-desc').value = "";
+                document.getElementById('n-cat-extra').value = "";
+                for(let i=1; i<=4; i++) document.getElementById(`file-${i}`).value = "";
+                alert("¡Producto publicado exitosamente!");
+
+            } catch (e) {
+                console.error(e);
+                alert("Error al guardar: " + e.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "Publicar Ahora";
+            }
+        };
+
+        window.eliminarProducto = async (id) => {
+            if (!currentUser) return;
+            if(confirm("¿Borrar definitivamente este producto?")) {
+                try {
+                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'productos', id));
+                } catch (e) {
+                    alert("Error al eliminar");
+                }
+            }
+        };
+
+        window.guardarConfig = async () => {
+            if (!currentUser) return;
+            const ws = document.getElementById('admin-ws').value;
+            try {
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global'), { ws });
+                window.wsNumber = ws;
+                alert("WhatsApp guardado correctamente");
+            } catch (e) {
+                alert("Error al guardar configuración");
+            }
+        };
+
+        function renderAdminList() {
+            const list = document.getElementById('lista-admin');
+            if(!list) return;
+            list.innerHTML = '';
+            
+            // Ordenamos en memoria
+            const sorted = [...currentProducts].sort((a,b) => (b.creadoEn || 0) - (a.creadoEn || 0));
+            
+            sorted.forEach(i => {
+                list.innerHTML += `
+                    <div class="p-5 flex items-center justify-between hover:bg-slate-50 transition-all border-b border-slate-50">
+                        <div class="flex items-center gap-4">
+                            <img src="${i.fotos[0] || ''}" class="w-14 h-14 object-cover rounded-2xl border" onerror="this.src='https://via.placeholder.com/100'">
+                            <div>
+                                <p class="font-bold text-slate-800 text-sm">${i.nombre}</p>
+                                <p class="text-[10px] font-black text-rose-500 uppercase tracking-widest">${i.tipo} • $${i.precio}</p>
+                            </div>
+                        </div>
+                        <button onclick="eliminarProducto('${i.id}')" class="text-slate-300 hover:text-red-500 p-2">
+                            <i class="ph-fill ph-trash text-2xl"></i>
+                        </button>
+                    </div>
+                `;
+            });
+        }
+
+        // Iniciar el proceso
+        initAuth();
+    </script>
+
+    <style>
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #fdfdfd; }
+        .font-serif { font-family: 'Playfair Display', serif; }
+        .hidden-view { display: none !important; }
+        .fade-in { animation: fadeIn 0.4s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        input[type="file"]::file-selector-button {
+            background-color: #f1f5f9;
+            color: #475569;
+            padding: 0.4rem 0.8rem;
+            border-radius: 0.5rem;
+            border: 1px solid #e2e8f0;
+            font-weight: 700;
+            font-size: 0.65rem;
+            cursor: pointer;
+            margin-right: 0.5rem;
+        }
+    </style>
+</head>
+<body class="text-slate-800">
+
+    <!-- TIENDA -->
+    <div id="vista-tienda" class="pb-24">
+        <header class="bg-white/90 backdrop-blur-md sticky top-0 z-40 border-b border-rose-50">
+            <div class="max-w-7xl mx-auto px-4 py-8 text-center">
+                <h1 id="admin-trigger" class="text-4xl md:text-6xl font-serif font-bold text-rose-600 italic tracking-tight select-none cursor-pointer">
+                    Creaciones Rec
+                </h1>
+                <p class="text-[11px] font-black text-slate-400 uppercase tracking-[0.5em] mt-2">Detalles Inolvidables</p>
+            </div>
+            
+            <div class="flex justify-center gap-4 pb-8 px-4 max-w-lg mx-auto">
+                <button onclick="cambiarFiltro('decoracion')" id="tab-decoracion" class="flex-1 py-4 rounded-2xl font-bold text-xs uppercase bg-rose-600 text-white shadow-xl shadow-rose-200">Decoración</button>
+                <button onclick="cambiarFiltro('regalo')" id="tab-regalo" class="flex-1 py-4 rounded-2xl font-bold text-xs uppercase bg-white text-slate-400 border border-slate-100">Regalo</button>
+            </div>
+        </header>
+
+        <main class="max-w-7xl mx-auto px-4 mt-12">
+            <div id="grid-main" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8"></div>
+        </main>
+    </div>
+
+    <!-- ADMIN -->
+    <div id="vista-admin" class="min-h-screen bg-slate-50 hidden-view pb-32">
+        <nav class="bg-slate-900 text-white p-6 sticky top-0 z-50 flex justify-between items-center shadow-xl">
+            <h2 class="text-xl font-serif italic font-bold">Panel Admin</h2>
+            <button onclick="document.getElementById('vista-admin').classList.add('hidden-view'); document.getElementById('vista-tienda').classList.remove('hidden-view');" class="bg-rose-600 px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest">Cerrar Panel</button>
+        </nav>
+
+        <div class="max-w-7xl mx-auto px-4 mt-12 grid grid-cols-1 lg:grid-cols-12 gap-10">
+            <div class="lg:col-span-5">
+                <div class="bg-white p-8 rounded-[2.5rem] shadow-xl border border-slate-100">
+                    <h3 class="font-bold text-xl mb-6 flex items-center gap-2"><i class="ph ph-plus-circle text-rose-600"></i> Nuevo Producto</h3>
+                    <div class="space-y-4">
+                        <select id="n-tipo" class="w-full p-4 bg-slate-50 rounded-2xl font-bold border-none ring-1 ring-slate-200 outline-none">
+                            <option value="decoracion">Decoración</option>
+                            <option value="regalo">Regalo</option>
+                        </select>
+                        <input type="text" id="n-nombre" placeholder="Nombre" class="w-full p-4 bg-slate-50 rounded-2xl ring-1 ring-slate-200 outline-none">
+                        <div class="grid grid-cols-2 gap-3">
+                            <input type="text" id="n-cat-extra" placeholder="Sub-categoría" class="w-full p-4 bg-slate-50 rounded-2xl ring-1 ring-slate-200 outline-none">
+                            <input type="number" id="n-precio" placeholder="Precio ($)" class="w-full p-4 bg-slate-50 rounded-2xl font-black text-rose-600 ring-1 ring-slate-200 outline-none">
+                        </div>
+                        <textarea id="n-desc" placeholder="Descripción..." class="w-full p-4 bg-slate-50 rounded-2xl ring-1 ring-slate-200 outline-none h-24 resize-none"></textarea>
+                        
+                        <div class="p-4 bg-rose-50/50 rounded-2xl border-2 border-dashed border-rose-100 space-y-2">
+                            <input type="file" id="file-1" accept="image/*" class="w-full text-xs">
+                            <input type="file" id="file-2" accept="image/*" class="w-full text-xs">
+                            <input type="file" id="file-3" accept="image/*" class="w-full text-xs">
+                            <input type="file" id="file-4" accept="image/*" class="w-full text-xs">
+                        </div>
+                        
+                        <button onclick="publicarProducto()" id="btn-publicar" class="w-full bg-slate-900 text-white py-5 rounded-[1.5rem] font-bold uppercase text-xs tracking-widest shadow-xl">Publicar Ahora</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="lg:col-span-7">
+                <div class="bg-white rounded-[2.5rem] shadow-xl overflow-hidden border border-slate-100">
+                    <div class="p-6 bg-slate-50 border-b flex justify-between items-center">
+                        <h3 class="font-bold">Publicados</h3>
+                        <div class="flex items-center gap-2">
+                            <input type="text" id="admin-ws" placeholder="WhatsApp" class="text-xs p-2 rounded-lg border outline-none w-32">
+                            <button onclick="guardarConfig()" class="bg-slate-900 text-white p-2 rounded-lg"><i class="ph ph-floppy-disk text-lg"></i></button>
+                        </div>
+                    </div>
+                    <div id="lista-admin" class="divide-y divide-slate-50 max-h-[600px] overflow-y-auto"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL DETALLE -->
+    <div id="modal-detalle" class="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[100] hidden-view flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-5xl rounded-[3rem] overflow-hidden shadow-2xl flex flex-col md:flex-row relative">
+            <button onclick="document.getElementById('modal-detalle').classList.add('hidden-view');" class="absolute top-6 right-6 z-20 bg-white p-2 rounded-full text-slate-900 shadow-xl"><i class="ph ph-x text-2xl"></i></button>
+            <div class="w-full md:w-3/5 bg-slate-50 p-6">
+                <img id="foto-principal" src="" class="w-full aspect-[4/5] object-cover rounded-[2rem] shadow-inner mb-4">
+                <div id="miniaturas" class="grid grid-cols-4 gap-3"></div>
+            </div>
+            <div class="w-full md:w-2/5 p-10 flex flex-col justify-center bg-white">
+                <span id="det-cat" class="text-xs font-black text-rose-500 uppercase tracking-widest mb-2"></span>
+                <h2 id="det-titulo" class="text-4xl font-serif font-bold italic
